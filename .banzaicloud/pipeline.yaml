@@ -1,0 +1,119 @@
+pipeline:
+  create_cluster:
+    image: banzaicloud/ci-pipeline-client:0.6
+    cluster:
+      name: kflautnerrjjv
+      location: us-west-2
+      cloud: amazon
+      secretId: 935b867665a506cec2d1921aa26476ca3872b07bd72feb0abc13a4b6df133363
+      secretName: ""
+      profileName: ""
+      postHooks:
+        InstallLogging:
+          bucketName: kris-aws-s3-bucket
+          region: eu-central-1
+          secretId: 935b867665a506cec2d1921aa26476ca3872b07bd72feb0abc13a4b6df133363
+        InstallMonitoring: {}
+      properties:
+        eks:
+          version: "1.10"
+          nodePools:
+            pool1:
+              instanceType: c5.xlarge
+              spotPrice: "0"
+              autoscaling: true
+              minCount: 1
+              maxCount: 2
+              count: 1
+              image: ""
+            pool2:
+              instanceType: t2.2xlarge
+              spotPrice: "0.29"
+              autoscaling: true
+              minCount: 1
+              maxCount: 2
+              count: 1
+              image: ""
+            system:
+              instanceType: t2.medium
+              spotPrice: ""
+              autoscaling: true
+              minCount: 1
+              maxCount: 2
+              count: 1
+              image: ""
+    action: EnsureCluster
+    installsecret: true
+  install_history_server_bucket_secrets:
+    action: InstallSecret
+    clusterSecret:
+      merge: true
+      name: eks-admin
+      namespace: default
+      spec: []
+    image: banzaicloud/ci-pipeline-client:0.6
+  install_history_server_auth_secrets:
+    action: InstallSecret
+    clusterSecret:
+      merge: true
+      name: spotguide-spark-2-historyserverpass
+      namespace: default
+      spec: []
+    image: banzaicloud/ci-pipeline-client:0.6
+  package_application:
+    image: lachlanevenson/k8s-helm:latest
+    commands:
+    - helm init -c
+    - helm repo add banzaicloud-stable http://kubernetes-charts.banzaicloud.com/branch/master
+    - helm package -u ./.banzaicloud/charts/spotguide-spark
+  deploy_application:
+    action: EnsureDeployment
+    deployment:
+      name: ./spotguide-spark-1.0.0.tgz
+      releaseName: '{{ .DRONE_REPO_NAME }}'
+      values:
+        banzaicloud:
+          bucket:
+            storageAccountName: null
+          spark:
+            executor:
+              num: "2"
+            image:
+              name: banzaicloud/spark:v2.3.2.111
+        historyServer:
+          enabled: true
+        spark:
+          monitoring:
+            enabled: true
+            jmxCollector: |
+              lowercaseOutputName: false
+              lowercaseOutputLabelNames: false
+              whitelistObjectNames: ["*:*"]
+            metricsProperties: |
+              # Enable Prometheus for all instances by class name
+              *.sink.prometheus.class=com.banzaicloud.spark.metrics.sink.PrometheusSink
+              # Prometheus pushgateway address
+              *.sink.prometheus.pushgateway-address=prometheus-pushgateway.pipeline-system:9091
+              *.sink.prometheus.pushgateway-enable-timestamp=true
+              *.sink.prometheus.enable-dropwizard-collector=false
+              *.sink.prometheus.enable-jmx-collector=true
+              *.sink.prometheus.jmx-collector-config=/opt/spark/conf/jmxCollector.yaml
+              *.sink.jmx.class=org.apache.spark.metrics.sink.JmxSink
+              # Enable JVM metrics source for all instances by class name
+              *.source.jvm.class=org.apache.spark.metrics.source.JvmSource
+          spark-hs:
+            ingress:
+              annotations:
+                ingress.kubernetes.io/ssl-redirect: "true"
+                kubernetes.io/ingress.class: traefik
+                traefik.frontend.rule.type: PathPrefixStrip
+                traefik.ingress.kubernetes.io/auth-secret: spotguide-spark-2-historyserverpass
+                traefik.ingress.kubernetes.io/auth-type: basic
+              enabled: true
+              hosts:
+              - shs.{{.DRONE_REPO_NAME}}.{{.CLUSTER_NAME}}.{{.ORG_NAME}}.{{.DOMAIN_NAME}}
+            sparkEventLogStorage:
+              cloudProvider: amazon
+              logDirectory: bucketke-yezx
+              secretName: eks-admin
+    image: banzaicloud/ci-pipeline-client:0.6
